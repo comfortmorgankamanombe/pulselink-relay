@@ -1,14 +1,43 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
+
+const baseRPCURL = "https://base-mainnet.g.alchemy.com/v2/aE6JU86iKh_qQRQVfUbmN"
+
+type rpcRequest struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  []any  `json:"params"`
+	ID      int    `json:"id"`
+}
+
+type rpcResponse struct {
+	Result string `json:"result"`
+}
+
+func fetchBaseBlockNumber() (uint64, error) {
+	body, _ := json.Marshal(rpcRequest{JSONRPC: "2.0", Method: "eth_blockNumber", Params: []any{}, ID: 1})
+	resp, err := http.Post(baseRPCURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	var rpc rpcResponse
+	if err := json.NewDecoder(resp.Body).Decode(&rpc); err != nil {
+		return 0, err
+	}
+	return strconv.ParseUint(strings.TrimPrefix(rpc.Result, "0x"), 16, 64)
+}
 
 // This is what a builder sends us when they submit a block
 type BuilderBlock struct {
@@ -23,19 +52,44 @@ var (
 	bestBlock          *BuilderBlock
 	totalFeesCollected float64
 	blockCount         int
+	baseBlockNumber    uint64
 	mu                 sync.Mutex
 )
 
 func main() {
 	fmt.Println("PulseLink Relay starting...")
 
+	// Poll Base mainnet for the latest block every 12 seconds
+	go func() {
+		poll := func() {
+			num, err := fetchBaseBlockNumber()
+			if err != nil {
+				log.Printf("Base RPC error: %v", err)
+				return
+			}
+			mu.Lock()
+			baseBlockNumber = num
+			mu.Unlock()
+			log.Printf("Base block number: %d", num)
+		}
+		poll()
+		ticker := time.NewTicker(12 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			poll()
+		}
+	}()
+
 	// Homepage
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		blocks := blockCount
 		fees := totalFeesCollected
+		baseBlock := baseBlockNumber
 		mu.Unlock()
-		fmt.Fprintf(w, "PulseLink Relay is live!\nBlocks processed: %d\nTotal ETH collected: %.6f ETH", blocks, fees)
+		fmt.Fprintf(w,
+			"PulseLink Relay is live!\nBlocks processed: %d\nTotal ETH collected: %.6f ETH\nBase block number: %d",
+			blocks, fees, baseBlock)
 	})
 
 	// Builders ping this to check we're alive
