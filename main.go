@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"crypto/sha256"
 	_ "embed"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math/big"
@@ -13,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	bls12381 "github.com/kilic/bls12-381"
 )
 
 //go:embed dashboard.html
@@ -294,6 +299,218 @@ func payloadToHeader(ep ExecutionPayload) ExecutionPayloadHeader {
 	}
 }
 
+// ── BLS signature verification ────────────────────────────────────────────────
+//
+// Builders sign their BidTrace message using the Ethereum builder signing domain
+// (DOMAIN_BUILDER_BID = 0x00000001) and the Ethereum mainnet genesis values.
+// The signing root is: sha256(hash_tree_root(BidTrace) || domain)
+// Signatures are BLS12-381 G2 points; public keys are G1 points.
+
+// builderDomain is computed once at startup.
+var builderDomain = func() [32]byte {
+	// hash_tree_root(ForkData{version: 0x00000000, genesis_validators_root})
+	// = sha256(versionChunk || gvrChunk)
+	var versionChunk [32]byte // genesis_fork_version 0x00000000 — already zeros
+	genesisValRoot, _ := hex.DecodeString("4b363db94e286120d76eb905340fdd4e54bfe9f06bf33ff6cf5ad27f511bfe95")
+	var forkData [64]byte
+	copy(forkData[32:], genesisValRoot)
+	forkDataRoot := sha256.Sum256(forkData[:])
+	_ = versionChunk
+
+	// domain = DOMAIN_BUILDER_BID || fork_data_root[:28]
+	var domain [32]byte
+	copy(domain[:4], []byte{0x00, 0x00, 0x00, 0x01})
+	copy(domain[4:], forkDataRoot[:28])
+	return domain
+}()
+
+// blsDST is the hash-to-curve domain separation tag for Ethereum BLS (POP scheme).
+var blsDST = []byte("BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_")
+
+// merkleizeChunks computes the SSZ Merkle root of fixed 32-byte chunks.
+func merkleizeChunks(chunks [][32]byte) [32]byte {
+	n := len(chunks)
+	if n == 0 {
+		return [32]byte{}
+	}
+	size := 1
+	for size < n {
+		size <<= 1
+	}
+	layer := make([][32]byte, size)
+	copy(layer, chunks)
+	for size > 1 {
+		for i := 0; i < size/2; i++ {
+			var pair [64]byte
+			copy(pair[:32], layer[2*i][:])
+			copy(pair[32:], layer[2*i+1][:])
+			layer[i] = sha256.Sum256(pair[:])
+		}
+		size /= 2
+	}
+	return layer[0]
+}
+
+// decodeHex decodes a 0x-prefixed hex string.
+func decodeHex(s string) ([]byte, error) {
+	return hex.DecodeString(strings.TrimPrefix(s, "0x"))
+}
+
+// hashBLSPubkey returns the SSZ hash_tree_root of a 48-byte BLS public key
+// (ByteVector[48] merkleized as 2 chunks of 32 bytes).
+func hashBLSPubkey(pkHex string) ([32]byte, error) {
+	b, err := decodeHex(pkHex)
+	if err != nil || len(b) != 48 {
+		return [32]byte{}, errors.New("must be 48 bytes")
+	}
+	var a, c [32]byte
+	copy(a[:], b[:32])
+	copy(c[:], b[32:]) // last 16 bytes + 16 zero padding
+	var pair [64]byte
+	copy(pair[:32], a[:])
+	copy(pair[32:], c[:])
+	return sha256.Sum256(pair[:]), nil
+}
+
+// bidTraceSigningRoot computes the SSZ signing root of a BidTrace.
+// All fields are fixed-size so there is no length mixing.
+func bidTraceSigningRoot(bt BidTrace) ([32]byte, error) {
+	chunks := make([][32]byte, 0, 9)
+
+	// 1. slot (uint64, little-endian, zero-padded to 32 bytes)
+	slot, err := strconv.ParseUint(bt.Slot, 10, 64)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("invalid slot: %w", err)
+	}
+	var slotChunk [32]byte
+	binary.LittleEndian.PutUint64(slotChunk[:8], slot)
+	chunks = append(chunks, slotChunk)
+
+	// 2. parent_hash (Bytes32)
+	ph, err := decodeHex(bt.ParentHash)
+	if err != nil || len(ph) != 32 {
+		return [32]byte{}, errors.New("invalid parent_hash: must be 32 bytes")
+	}
+	var phChunk [32]byte
+	copy(phChunk[:], ph)
+	chunks = append(chunks, phChunk)
+
+	// 3. block_hash (Bytes32)
+	bh, err := decodeHex(bt.BlockHash)
+	if err != nil || len(bh) != 32 {
+		return [32]byte{}, errors.New("invalid block_hash: must be 32 bytes")
+	}
+	var bhChunk [32]byte
+	copy(bhChunk[:], bh)
+	chunks = append(chunks, bhChunk)
+
+	// 4. builder_pubkey (ByteVector[48])
+	bpkRoot, err := hashBLSPubkey(bt.BuilderPubkey)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("invalid builder_pubkey: %w", err)
+	}
+	chunks = append(chunks, bpkRoot)
+
+	// 5. proposer_pubkey (ByteVector[48])
+	ppkRoot, err := hashBLSPubkey(bt.ProposerPubkey)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("invalid proposer_pubkey: %w", err)
+	}
+	chunks = append(chunks, ppkRoot)
+
+	// 6. proposer_fee_recipient (ByteVector[20], right-padded to 32 bytes)
+	fr, err := decodeHex(bt.ProposerFeeRecipient)
+	if err != nil || len(fr) != 20 {
+		return [32]byte{}, errors.New("invalid proposer_fee_recipient: must be 20 bytes")
+	}
+	var frChunk [32]byte
+	copy(frChunk[:], fr)
+	chunks = append(chunks, frChunk)
+
+	// 7. gas_limit (uint64, little-endian)
+	gasLimit, err := strconv.ParseUint(bt.GasLimit, 10, 64)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("invalid gas_limit: %w", err)
+	}
+	var glChunk [32]byte
+	binary.LittleEndian.PutUint64(glChunk[:8], gasLimit)
+	chunks = append(chunks, glChunk)
+
+	// 8. gas_used (uint64, little-endian)
+	gasUsed, err := strconv.ParseUint(bt.GasUsed, 10, 64)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("invalid gas_used: %w", err)
+	}
+	var guChunk [32]byte
+	binary.LittleEndian.PutUint64(guChunk[:8], gasUsed)
+	chunks = append(chunks, guChunk)
+
+	// 9. value (uint256, 32-byte little-endian)
+	v, ok := new(big.Int).SetString(bt.Value, 10)
+	if !ok {
+		return [32]byte{}, errors.New("invalid value: not a decimal integer")
+	}
+	vb := v.Bytes() // big-endian from big.Int
+	var vChunk [32]byte
+	for i, b := range vb { // reverse to little-endian
+		vChunk[len(vb)-1-i] = b
+	}
+	chunks = append(chunks, vChunk)
+
+	// SSZ hash_tree_root(BidTrace)
+	objectRoot := merkleizeChunks(chunks)
+
+	// signing_root = hash_tree_root(SigningData{objectRoot, domain})
+	//              = sha256(objectRoot || domain)  (two 32-byte fields, no list)
+	var signingData [64]byte
+	copy(signingData[:32], objectRoot[:])
+	copy(signingData[32:], builderDomain[:])
+	signingRoot := sha256.Sum256(signingData[:])
+	return signingRoot, nil
+}
+
+// verifyBuilderSignature checks the BLS12-381 signature on a block submission.
+// pk  = builder_pubkey (48-byte compressed G1 point)
+// sig = signature field (96-byte compressed G2 point)
+// Verify: e(G1_gen, sig) == e(pk, H(signingRoot))
+func verifyBuilderSignature(pubkeyHex, sigHex string, signingRoot [32]byte) error {
+	pkBytes, err := decodeHex(pubkeyHex)
+	if err != nil || len(pkBytes) != 48 {
+		return errors.New("builder_pubkey must be a 48-byte compressed BLS12-381 G1 point")
+	}
+	sigBytes, err := decodeHex(sigHex)
+	if err != nil || len(sigBytes) != 96 {
+		return errors.New("signature must be a 96-byte compressed BLS12-381 G2 point")
+	}
+
+	eng := bls12381.NewEngine()
+
+	pk, err := eng.G1.FromCompressed(pkBytes)
+	if err != nil {
+		return fmt.Errorf("failed to decode pubkey: %w", err)
+	}
+
+	sig, err := eng.G2.FromCompressed(sigBytes)
+	if err != nil {
+		return fmt.Errorf("failed to decode signature: %w", err)
+	}
+
+	// Hash the 32-byte signing root to a G2 point using the Ethereum BLS DST.
+	msgPoint, err := eng.G2.HashToCurve(signingRoot[:], blsDST)
+	if err != nil {
+		return fmt.Errorf("hash-to-G2 failed: %w", err)
+	}
+
+	// Miller loop check: e(-G1_gen, sig) * e(pk, H(m)) == 1
+	// Equivalent to: e(G1_gen, sig) == e(pk, H(m))
+	eng.AddPairInv(eng.G1.One(), sig) // e(-G1_gen, sig)
+	eng.AddPair(pk, msgPoint)         // e(pk, H(m))
+	if !eng.Check() {
+		return errors.New("BLS signature is invalid")
+	}
+	return nil
+}
+
 func queryLimit(r *http.Request, def int) int {
 	if s := r.URL.Query().Get("limit"); s != "" {
 		if l, err := strconv.Atoi(s); err == nil && l > 0 {
@@ -456,6 +673,22 @@ func main() {
 		}
 		if req.Message.BlockHash != req.ExecutionPayload.BlockHash {
 			jsonErr(w, "block_hash mismatch between message and execution_payload", http.StatusBadRequest)
+			return
+		}
+		if req.Signature == "" {
+			jsonErr(w, "missing signature", http.StatusBadRequest)
+			return
+		}
+
+		// BLS signature verification — builder must sign BidTrace with their key
+		signingRoot, err := bidTraceSigningRoot(req.Message)
+		if err != nil {
+			jsonErr(w, "failed to compute signing root: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := verifyBuilderSignature(req.Message.BuilderPubkey, req.Signature, signingRoot); err != nil {
+			log.Printf("Rejected block from %s: %v", req.Message.BuilderPubkey, err)
+			jsonErr(w, "invalid signature: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
