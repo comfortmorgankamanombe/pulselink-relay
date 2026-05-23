@@ -622,6 +622,99 @@ func queryLimit(r *http.Request, def int) int {
 	return def
 }
 
+// ── Beacon node (proposer verification) ───────────────────────────────────────
+
+var (
+	beaconURL        string
+	beaconHTTPClient = &http.Client{Timeout: 5 * time.Second}
+	beaconAvailable  bool // false = beacon unreachable at startup; log-only mode
+)
+
+type beaconValidatorResponse struct {
+	Data []struct {
+		Status    string `json:"status"`
+		Validator struct {
+			Pubkey string `json:"pubkey"`
+		} `json:"validator"`
+	} `json:"data"`
+}
+
+type cachedValidatorStatus struct {
+	active    bool
+	expiresAt time.Time
+}
+
+var (
+	valStatusCache   = make(map[string]cachedValidatorStatus)
+	valStatusCacheMu sync.Mutex
+)
+
+func initBeacon() {
+	beaconURL = os.Getenv("BASE_BEACON_URL")
+	if beaconURL == "" {
+		beaconURL = "https://eth-beacon-chain.drpc.org"
+	}
+	resp, err := beaconHTTPClient.Get(beaconURL + "/eth/v1/node/version")
+	if err != nil || resp.StatusCode >= 500 {
+		log.Printf("Beacon: cannot reach %s — soft launch mode (validator checks non-blocking)", beaconURL)
+		beaconAvailable = false
+		return
+	}
+	resp.Body.Close()
+	beaconAvailable = true
+	log.Printf("Beacon: connected to %s", beaconURL)
+}
+
+// isValidatorActive queries the beacon node to verify pubkey is an active validator.
+// Returns (true, nil) if active, (false, nil) if found but inactive,
+// (false, err) if the beacon node could not be reached.
+// Results are cached for one epoch (384 seconds).
+func isValidatorActive(pubkey string) (bool, error) {
+	valStatusCacheMu.Lock()
+	if cached, ok := valStatusCache[pubkey]; ok && time.Now().Before(cached.expiresAt) {
+		active := cached.active
+		valStatusCacheMu.Unlock()
+		return active, nil
+	}
+	valStatusCacheMu.Unlock()
+
+	url := beaconURL + "/eth/v1/beacon/states/head/validators?id=" + pubkey
+	resp, err := beaconHTTPClient.Get(url)
+	if err != nil {
+		return false, fmt.Errorf("beacon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		valStatusCacheMu.Lock()
+		valStatusCache[pubkey] = cachedValidatorStatus{active: false, expiresAt: time.Now().Add(384 * time.Second)}
+		valStatusCacheMu.Unlock()
+		return false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("beacon returned HTTP %d", resp.StatusCode)
+	}
+
+	var result beaconValidatorResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return false, fmt.Errorf("beacon decode error: %w", err)
+	}
+
+	active := false
+	for _, v := range result.Data {
+		if strings.HasPrefix(v.Status, "active") {
+			active = true
+			break
+		}
+	}
+
+	valStatusCacheMu.Lock()
+	valStatusCache[pubkey] = cachedValidatorStatus{active: active, expiresAt: time.Now().Add(384 * time.Second)}
+	valStatusCacheMu.Unlock()
+
+	return active, nil
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 func main() {
@@ -629,6 +722,7 @@ func main() {
 
 	initRedis()
 	recoverFromRedis()
+	initBeacon()
 
 	// Poll Base mainnet block number every 12 seconds
 	go func() {
@@ -807,6 +901,19 @@ func main() {
 			log.Printf("Rejected block from %s: %v", req.Message.BuilderPubkey, err)
 			jsonErr(w, "invalid signature: "+err.Error(), http.StatusBadRequest)
 			return
+		}
+
+		// Verify proposer is an active validator via beacon node.
+		// Soft launch: if beacon is unreachable, log and proceed rather than blocking.
+		if req.Message.ProposerPubkey != "" {
+			active, err := isValidatorActive(req.Message.ProposerPubkey)
+			if err != nil {
+				log.Printf("Beacon check warning (soft launch): proposer=%s err=%v — accepting block", req.Message.ProposerPubkey, err)
+			} else if !active {
+				log.Printf("Rejected block: proposer %s is not an active validator", req.Message.ProposerPubkey)
+				jsonErr(w, "proposer not scheduled for slot: validator not active", http.StatusBadRequest)
+				return
+			}
 		}
 
 		value := parseWei(req.Message.Value)
