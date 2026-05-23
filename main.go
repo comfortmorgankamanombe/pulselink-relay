@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/binary"
@@ -12,12 +13,14 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	bls12381 "github.com/kilic/bls12-381"
+	"github.com/redis/go-redis/v9"
 )
 
 //go:embed dashboard.html
@@ -217,6 +220,105 @@ type ProcessedBlock struct {
 	BuilderID   string    `json:"builder_id"`
 	Fee         float64   `json:"fee"`
 	Time        time.Time `json:"time"`
+}
+
+// ── Redis ─────────────────────────────────────────────────────────────────────
+
+var (
+	rdb   *redis.Client
+	bgCtx = context.Background()
+)
+
+func initRedis() {
+	url := os.Getenv("REDIS_URL")
+	if url == "" {
+		url = "redis://localhost:6379"
+	}
+	opts, err := redis.ParseURL(url)
+	if err != nil {
+		log.Fatalf("Redis: invalid REDIS_URL %q: %v", url, err)
+	}
+	rdb = redis.NewClient(opts)
+	if err := rdb.Ping(bgCtx).Err(); err != nil {
+		log.Fatalf("Redis: connection failed (is Redis running?): %v", err)
+	}
+	log.Printf("Redis: connected to %s", url)
+}
+
+func recoverFromRedis() {
+	// Validator registrations
+	var cursor uint64
+	for {
+		keys, next, err := rdb.Scan(bgCtx, cursor, "pulselink:validators:*", 100).Result()
+		if err != nil {
+			log.Printf("Redis recovery scan error (validators): %v", err)
+			break
+		}
+		for _, key := range keys {
+			data, err := rdb.Get(bgCtx, key).Bytes()
+			if err != nil {
+				continue
+			}
+			var reg SignedValidatorRegistration
+			if json.Unmarshal(data, &reg) != nil || reg.Message.Pubkey == "" {
+				continue
+			}
+			pk := reg.Message.Pubkey
+			if _, exists := validatorIdxMap[pk]; !exists {
+				validatorIdxMap[pk] = nextValIdx
+				nextValIdx++
+			}
+			validatorRegs[pk] = reg
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	log.Printf("Redis recovery: %d validator registrations", len(validatorRegs))
+
+	// Stored blocks / bids
+	cursor = 0
+	for {
+		keys, next, err := rdb.Scan(bgCtx, cursor, "pulselink:bids:*:*", 100).Result()
+		if err != nil {
+			log.Printf("Redis recovery scan error (bids): %v", err)
+			break
+		}
+		for _, key := range keys {
+			data, err := rdb.Get(bgCtx, key).Bytes()
+			if err != nil {
+				continue
+			}
+			var sbd storedBlockData
+			if json.Unmarshal(data, &sbd) != nil {
+				continue
+			}
+			stored := &StoredBlock{
+				Req:        sbd.Req,
+				Value:      parseWei(sbd.Value),
+				ReceivedAt: sbd.ReceivedAt,
+			}
+			slot := stored.Req.Message.Slot
+			blockHash := stored.Req.Message.BlockHash
+			blocksByHash[blockHash] = stored
+			if existing, ok := bestBlocks[slot]; !ok || stored.Value.Cmp(existing.Value) > 0 {
+				bestBlocks[slot] = stored
+			}
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	log.Printf("Redis recovery: %d stored blocks", len(blocksByHash))
+}
+
+// storedBlockData is a JSON-serializable wrapper for StoredBlock.
+type storedBlockData struct {
+	Req        SubmitBlockRequest `json:"req"`
+	Value      string             `json:"value"` // decimal wei string
+	ReceivedAt time.Time          `json:"received_at"`
 }
 
 // ── In-memory state ───────────────────────────────────────────────────────────
@@ -525,6 +627,9 @@ func queryLimit(r *http.Request, def int) int {
 func main() {
 	fmt.Printf("PulseLink Relay starting — Base L2 chain ID %d\n", chainID)
 
+	initRedis()
+	recoverFromRedis()
+
 	// Poll Base mainnet block number every 12 seconds
 	go func() {
 		poll := func() {
@@ -612,6 +717,18 @@ func main() {
 			validatorRegs[pk] = reg
 		}
 		mu.Unlock()
+
+		// Persist to Redis outside the lock
+		for _, reg := range regs {
+			if reg.Message.Pubkey == "" {
+				continue
+			}
+			data, _ := json.Marshal(reg)
+			key := "pulselink:validators:" + reg.Message.Pubkey
+			if err := rdb.Set(bgCtx, key, data, 0).Err(); err != nil {
+				log.Printf("Redis write error (validator %s): %v", reg.Message.Pubkey, err)
+			}
+		}
 
 		log.Printf("Validator registration: %d entries stored (total: %d)", len(regs), len(validatorRegs))
 		w.WriteHeader(http.StatusOK)
@@ -744,6 +861,19 @@ func main() {
 
 		mu.Unlock()
 
+		// Persist to Redis outside the lock
+		sbd := storedBlockData{Req: req, Value: req.Message.Value, ReceivedAt: now}
+		if data, err := json.Marshal(sbd); err == nil {
+			bidKey := fmt.Sprintf("pulselink:bids:%s:%s", req.Message.Slot, req.Message.BlockHash)
+			hashKey := "pulselink:blockbyhash:" + req.Message.BlockHash
+			if err := rdb.Set(bgCtx, bidKey, data, 0).Err(); err != nil {
+				log.Printf("Redis write error (%s): %v", bidKey, err)
+			}
+			if err := rdb.Set(bgCtx, hashKey, data, 0).Err(); err != nil {
+				log.Printf("Redis write error (%s): %v", hashKey, err)
+			}
+		}
+
 		log.Printf("Block received: slot=%s hash=%s builder=%s value=%s wei (%d txs)",
 			req.Message.Slot, req.Message.BlockHash, req.Message.BuilderPubkey, req.Message.Value, numTx)
 
@@ -813,6 +943,24 @@ func main() {
 		mu.Lock()
 		stored, ok := blocksByHash[blockHash]
 		mu.Unlock()
+
+		if !ok {
+			// Fall back to Redis
+			if data, err := rdb.Get(bgCtx, "pulselink:blockbyhash:"+blockHash).Bytes(); err == nil {
+				var sbd storedBlockData
+				if json.Unmarshal(data, &sbd) == nil {
+					stored = &StoredBlock{
+						Req:        sbd.Req,
+						Value:      parseWei(sbd.Value),
+						ReceivedAt: sbd.ReceivedAt,
+					}
+					ok = true
+					mu.Lock()
+					blocksByHash[blockHash] = stored
+					mu.Unlock()
+				}
+			}
+		}
 
 		if !ok {
 			jsonErr(w, "no execution payload found for block_hash "+blockHash, http.StatusBadRequest)
