@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,6 +12,9 @@ import (
 	"sync"
 	"time"
 )
+
+//go:embed dashboard.html
+var dashboardHTML string
 
 const baseRPCURL = "https://base-mainnet.g.alchemy.com/v2/aE6JU86iKh_qQRQVfUbmN"
 
@@ -39,7 +43,6 @@ func fetchBaseBlockNumber() (uint64, error) {
 	return strconv.ParseUint(strings.TrimPrefix(rpc.Result, "0x"), 16, 64)
 }
 
-// This is what a builder sends us when they submit a block
 type BuilderBlock struct {
 	BlockNumber string `json:"block_number"`
 	BlockHash   string `json:"block_hash"`
@@ -47,12 +50,19 @@ type BuilderBlock struct {
 	BuilderID   string `json:"builder_id"`
 }
 
-// We store the best block here in memory
+type ProcessedBlock struct {
+	BlockNumber string    `json:"block_number"`
+	BuilderID   string    `json:"builder_id"`
+	Fee         float64   `json:"fee"`
+	Time        time.Time `json:"time"`
+}
+
 var (
 	bestBlock          *BuilderBlock
 	totalFeesCollected float64
 	blockCount         int
 	baseBlockNumber    uint64
+	recentBlocks       []ProcessedBlock
 	mu                 sync.Mutex
 )
 
@@ -80,16 +90,26 @@ func main() {
 		}
 	}()
 
-	// Homepage
+	// Dashboard
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, dashboardHTML)
+	})
+
+	// Live stats API consumed by the dashboard
+	http.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		blocks := blockCount
-		fees := totalFeesCollected
-		baseBlock := baseBlockNumber
+		recent := make([]ProcessedBlock, len(recentBlocks))
+		copy(recent, recentBlocks)
+		stats := map[string]any{
+			"base_block_number":    baseBlockNumber,
+			"blocks_processed":     blockCount,
+			"total_fees_collected": totalFeesCollected,
+			"recent_blocks":        recent,
+		}
 		mu.Unlock()
-		fmt.Fprintf(w,
-			"PulseLink Relay is live!\nBlocks processed: %d\nTotal ETH collected: %.6f ETH\nBase block number: %d",
-			blocks, fees, baseBlock)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(stats)
 	})
 
 	// Builders ping this to check we're alive
@@ -98,7 +118,7 @@ func main() {
 		fmt.Fprintf(w, `{"status":"ok","relay":"pulselink","version":"0.1.0","time":"%s"}`, time.Now().Format(time.RFC3339))
 	})
 
-	// THIS IS THE TOLLGATE — builders POST their blocks here
+	// Builders POST their blocks here
 	http.HandleFunc("/relay/v1/builder/blocks", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -106,8 +126,7 @@ func main() {
 		}
 
 		var block BuilderBlock
-		err := json.NewDecoder(r.Body).Decode(&block)
-		if err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&block); err != nil {
 			http.Error(w, "Invalid block data", http.StatusBadRequest)
 			return
 		}
@@ -126,7 +145,6 @@ func main() {
 			return
 		}
 
-		// Log it so we can see blocks coming in
 		log.Printf("Block received from builder %s | Block #%s | Fee: %s ETH",
 			block.BuilderID, block.BlockNumber, block.GasFee)
 
@@ -134,8 +152,16 @@ func main() {
 		totalFeesCollected += fee
 		blockCount++
 		bestBlock = &block
+		recentBlocks = append([]ProcessedBlock{{
+			BlockNumber: block.BlockNumber,
+			BuilderID:   block.BuilderID,
+			Fee:         fee,
+			Time:        time.Now(),
+		}}, recentBlocks...)
+		if len(recentBlocks) > 10 {
+			recentBlocks = recentBlocks[:10]
+		}
 		mu.Unlock()
-
 
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"status":"accepted","message":"Block received by PulseLink"}`)
@@ -155,4 +181,3 @@ func main() {
 	fmt.Println("Listening on port 8080...")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
-
