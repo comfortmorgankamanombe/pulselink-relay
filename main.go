@@ -715,6 +715,235 @@ func isValidatorActive(pubkey string) (bool, error) {
 	return active, nil
 }
 
+// ── Block simulation (Alchemy RPC — temporary until local op-geth) ───────────
+
+var (
+	simulationHard      bool // true = reject on any sim failure; false = log-only for RPC errors
+	alchemyHTTPClient   = &http.Client{Timeout: 8 * time.Second}
+)
+
+func initSimulation() {
+	mode := strings.ToLower(os.Getenv("SIMULATION_MODE"))
+	simulationHard = mode == "hard"
+	if simulationHard {
+		log.Printf("Simulation: HARD mode — blocks rejected if Alchemy is unreachable")
+	} else {
+		log.Printf("Simulation: SOFT mode — fee/gas enforced, Alchemy errors log-only (set SIMULATION_MODE=hard to enforce tx simulation)")
+	}
+}
+
+// rlpRead returns the payload of the next RLP item starting at b[off]
+// and the new offset past it. Lists return their inner content.
+func rlpRead(b []byte, off int) (payload []byte, next int, err error) {
+	if off >= len(b) {
+		return nil, off, errors.New("rlp: unexpected end")
+	}
+	c := b[off]
+	switch {
+	case c < 0x80: // single byte value
+		return b[off : off+1], off + 1, nil
+	case c <= 0xb7: // short string
+		l := int(c - 0x80)
+		end := off + 1 + l
+		if end > len(b) {
+			return nil, off, errors.New("rlp: short string truncated")
+		}
+		return b[off+1 : end], end, nil
+	case c <= 0xbf: // long string
+		ll := int(c - 0xb7)
+		if off+1+ll > len(b) {
+			return nil, off, errors.New("rlp: long string length truncated")
+		}
+		l := rlpBigEndian(b[off+1 : off+1+ll])
+		end := off + 1 + ll + l
+		if end > len(b) {
+			return nil, off, errors.New("rlp: long string truncated")
+		}
+		return b[off+1+ll : end], end, nil
+	case c <= 0xf7: // short list
+		l := int(c - 0xc0)
+		end := off + 1 + l
+		if end > len(b) {
+			return nil, off, errors.New("rlp: short list truncated")
+		}
+		return b[off+1 : end], end, nil
+	default: // long list
+		ll := int(c - 0xf7)
+		if off+1+ll > len(b) {
+			return nil, off, errors.New("rlp: long list length truncated")
+		}
+		l := rlpBigEndian(b[off+1 : off+1+ll])
+		end := off + 1 + ll + l
+		if end > len(b) {
+			return nil, off, errors.New("rlp: long list truncated")
+		}
+		return b[off+1+ll : end], end, nil
+	}
+}
+
+func rlpBigEndian(b []byte) int {
+	n := 0
+	for _, v := range b {
+		n = (n << 8) | int(v)
+	}
+	return n
+}
+
+// rlpItems splits an RLP list payload into its top-level element payloads.
+func rlpItems(payload []byte) ([][]byte, error) {
+	var items [][]byte
+	off := 0
+	for off < len(payload) {
+		item, next, err := rlpRead(payload, off)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+		off = next
+	}
+	return items, nil
+}
+
+type simTx struct {
+	to    string // 0x-prefixed 20-byte address, or "" for contract creation
+	value string // 0x-prefixed hex
+	data  string // 0x-prefixed hex calldata
+}
+
+// parseSimTx extracts to / value / data from a raw hex-encoded transaction.
+// Handles legacy (type 0), EIP-2930 (type 1), EIP-1559 (type 2).
+func parseSimTx(hexTx string) (*simTx, error) {
+	b, err := decodeHex(hexTx)
+	if err != nil || len(b) == 0 {
+		return nil, fmt.Errorf("hex decode: %w", err)
+	}
+
+	// Determine start of RLP list and field offsets by transaction type.
+	// legacy:  RLP([nonce, gasPrice, gas, to, value, data, v, r, s])           to=3 val=4 data=5
+	// type 1:  0x01 || RLP([chainId, nonce, gasPrice, gas, to, value, data, …]) to=4 val=5 data=6
+	// type 2:  0x02 || RLP([chainId, nonce, maxPri, maxFee, gas, to, val, data, …]) to=5 val=6 data=7
+	rlpStart := 0
+	toIdx, valIdx, dataIdx := 3, 4, 5
+	switch b[0] {
+	case 0x01:
+		rlpStart, toIdx, valIdx, dataIdx = 1, 4, 5, 6
+	case 0x02:
+		rlpStart, toIdx, valIdx, dataIdx = 1, 5, 6, 7
+	}
+
+	listPayload, _, err := rlpRead(b, rlpStart)
+	if err != nil {
+		return nil, fmt.Errorf("rlp list: %w", err)
+	}
+	items, err := rlpItems(listPayload)
+	if err != nil {
+		return nil, fmt.Errorf("rlp items: %w", err)
+	}
+	if len(items) <= dataIdx {
+		return nil, fmt.Errorf("too few rlp fields: %d", len(items))
+	}
+
+	tx := &simTx{
+		data: "0x" + hex.EncodeToString(items[dataIdx]),
+	}
+	if toField := items[toIdx]; len(toField) == 20 {
+		tx.to = "0x" + hex.EncodeToString(toField)
+	}
+	if vf := items[valIdx]; len(vf) > 0 {
+		tx.value = "0x" + hex.EncodeToString(vf)
+	} else {
+		tx.value = "0x0"
+	}
+	return tx, nil
+}
+
+type estimateGasCall struct {
+	To    string `json:"to,omitempty"`
+	Value string `json:"value,omitempty"`
+	Data  string `json:"data,omitempty"`
+}
+
+// runEstimateGas calls eth_estimateGas on Alchemy for a single parsed transaction.
+// Returns nil if the tx would succeed, an error if it would revert or Alchemy is unreachable.
+func runEstimateGas(tx *simTx) error {
+	body, _ := json.Marshal(rpcRequest{
+		JSONRPC: "2.0",
+		Method:  "eth_estimateGas",
+		Params:  []any{estimateGasCall{To: tx.to, Value: tx.value, Data: tx.data}, "latest"},
+		ID:      1,
+	})
+	resp, err := alchemyHTTPClient.Post(baseRPCURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("alchemy unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Result string `json:"result"`
+		Error  struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("alchemy decode: %w", err)
+	}
+	if result.Error.Message != "" {
+		return fmt.Errorf("execution reverted: %s", result.Error.Message)
+	}
+	return nil
+}
+
+const maxSimTxs = 20 // cap per-block tx checks to bound latency
+
+// simulateBlock runs pre-acceptance checks on a submitted block.
+// Returns ("", true) on pass or (reason, false) to reject.
+// Fee-recipient and gas checks are always enforced.
+// eth_estimateGas failures are only enforced in HARD mode.
+func simulateBlock(req SubmitBlockRequest) (string, bool) {
+	// 1. fee_recipient must match the proposer's registered address
+	mu.Lock()
+	reg, hasReg := validatorRegs[req.Message.ProposerPubkey]
+	mu.Unlock()
+
+	if hasReg {
+		want := strings.ToLower(reg.Message.FeeRecipient)
+		got := strings.ToLower(req.ExecutionPayload.FeeRecipient)
+		if want != "" && got != want {
+			return fmt.Sprintf("fee_recipient mismatch: block has %s, validator registered %s", got, want), false
+		}
+	}
+
+	// 2. gas_used must not exceed gas_limit
+	gasUsed, errU := strconv.ParseUint(req.ExecutionPayload.GasUsed, 10, 64)
+	gasLimit, errL := strconv.ParseUint(req.ExecutionPayload.GasLimit, 10, 64)
+	if errU == nil && errL == nil && gasUsed > gasLimit {
+		return fmt.Sprintf("gas_used %d exceeds gas_limit %d", gasUsed, gasLimit), false
+	}
+
+	// 3. per-tx simulation via eth_estimateGas (capped to avoid timeout)
+	txs := req.ExecutionPayload.Transactions
+	if len(txs) > maxSimTxs {
+		txs = txs[:maxSimTxs]
+	}
+	for i, rawTx := range txs {
+		tx, err := parseSimTx(rawTx)
+		if err != nil {
+			log.Printf("Simulation: tx[%d] parse skipped (%v)", i, err)
+			continue
+		}
+		if err := runEstimateGas(tx); err != nil {
+			msg := fmt.Sprintf("tx[%d] simulation failed: %v", i, err)
+			if simulationHard {
+				return msg, false
+			}
+			log.Printf("Simulation warning (soft): %s — block accepted", msg)
+		}
+	}
+
+	return "", true
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 func main() {
@@ -723,6 +952,7 @@ func main() {
 	initRedis()
 	recoverFromRedis()
 	initBeacon()
+	initSimulation()
 
 	// Poll Base mainnet block number every 12 seconds
 	go func() {
@@ -914,6 +1144,13 @@ func main() {
 				jsonErr(w, "proposer not scheduled for slot: validator not active", http.StatusBadRequest)
 				return
 			}
+		}
+
+		// Block simulation: fee_recipient, gas, and per-tx eth_estimateGas checks.
+		if reason, ok := simulateBlock(req); !ok {
+			log.Printf("Simulation rejected block from %s: %s", req.Message.BuilderPubkey, reason)
+			jsonErr(w, "block simulation failed: "+reason, http.StatusBadRequest)
+			return
 		}
 
 		value := parseWei(req.Message.Value)
