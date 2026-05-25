@@ -294,9 +294,19 @@
       <div class="card-icon">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 3H8L2 7h20z"/></svg>
       </div>
-      <div class="card-label">Base Block Number</div>
+      <div class="card-label">Base Block</div>
       <div class="card-value" id="base-block">—</div>
-      <div class="card-sub">Refreshes every 12 seconds</div>
+      <div class="card-sub">Chain ID 8453 · every 12s</div>
+    </div>
+
+    <div class="card blue">
+      <div class="card-accent"></div>
+      <div class="card-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linecap="round"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5"/><line x1="12" y1="22" x2="12" y2="15.5"/><polyline points="22 8.5 12 15.5 2 8.5"/></svg>
+      </div>
+      <div class="card-label">Arbitrum Block</div>
+      <div class="card-value" id="arbitrum-block">—</div>
+      <div class="card-sub">Chain ID 42161 · every 12s</div>
     </div>
 
     <div class="card purple">
@@ -418,6 +428,7 @@
       const d = await fetch('/api/stats').then(r => r.json());
 
       setText('base-block', Number(d.base_block_number).toLocaleString());
+      setText('arbitrum-block', Number(d.arbitrum_block_number).toLocaleString());
       setText('blocks-processed', Number(d.blocks_processed).toLocaleString());
       setText('total-eth', Number(d.total_fees_collected).toFixed(6) + ' ETH');
 

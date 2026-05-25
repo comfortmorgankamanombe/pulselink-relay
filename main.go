@@ -27,11 +27,14 @@ import (
 var dashboardHTML string
 
 const (
-	baseRPCURL  = "https://base-mainnet.g.alchemy.com/v2/aE6JU86iKh_qQRQVfUbmN"
-	chainID     = 8453
-	relayPubkey = "0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-	relaySig    = "0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+	baseRPCURL      = "https://base-mainnet.g.alchemy.com/v2/aE6JU86iKh_qQRQVfUbmN"
+	chainID         = 8453
+	arbitrumChainID = 42161
+	relayPubkey     = "0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+	relaySig        = "0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 )
+
+var arbitrumRPCURL string
 
 // ── Shared HTTP transport (connection pooling for all outbound RPC calls) ─────
 
@@ -61,9 +64,9 @@ type rpcResponse struct {
 	Result string `json:"result"`
 }
 
-func fetchBaseBlockNumber() (uint64, error) {
+func fetchBlockNumber(rpcURL string) (uint64, error) {
 	body, _ := json.Marshal(rpcRequest{JSONRPC: "2.0", Method: "eth_blockNumber", Params: []any{}, ID: 1})
-	resp, err := baseRPCClient.Post(baseRPCURL, "application/json", bytes.NewReader(body))
+	resp, err := baseRPCClient.Post(rpcURL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return 0, err
 	}
@@ -74,6 +77,9 @@ func fetchBaseBlockNumber() (uint64, error) {
 	}
 	return strconv.ParseUint(strings.TrimPrefix(rpc.Result, "0x"), 16, 64)
 }
+
+func fetchBaseBlockNumber() (uint64, error)     { return fetchBlockNumber(baseRPCURL) }
+func fetchArbitrumBlockNumber() (uint64, error) { return fetchBlockNumber(arbitrumRPCURL) }
 
 // ── Relay types ───────────────────────────────────────────────────────────────
 
@@ -340,10 +346,11 @@ type storedBlockData struct {
 
 var (
 	// Dashboard stats
-	totalFeesCollected float64
-	blockCount         int
-	baseBlockNumber    uint64
-	recentBlocks       []ProcessedBlock
+	totalFeesCollected  float64
+	blockCount          int
+	baseBlockNumber     uint64
+	arbitrumBlockNumber uint64
+	recentBlocks        []ProcessedBlock
 
 	// Validator registry: pubkey -> registration
 	validatorRegs    = make(map[string]SignedValidatorRegistration)
@@ -976,7 +983,12 @@ func prewarmAlchemy() {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 func main() {
-	fmt.Printf("PulseLink Relay starting — Base L2 chain ID %d\n", chainID)
+	fmt.Printf("PulseLink Relay starting — Base L2 chain ID %d, Arbitrum One chain ID %d\n", chainID, arbitrumChainID)
+
+	arbitrumRPCURL = os.Getenv("ARBITRUM_RPC_URL")
+	if arbitrumRPCURL == "" {
+		arbitrumRPCURL = "https://arb-mainnet.g.alchemy.com/v2/aE6JU86iKh_qQRQVfUbmN"
+	}
 
 	initRedis()
 	recoverFromRedis()
@@ -984,18 +996,18 @@ func main() {
 	initSimulation()
 	prewarmAlchemy()
 
-	// Poll Base mainnet block number every 12 seconds
-	go func() {
+	// Poll Base and Arbitrum block numbers every 12 seconds
+	pollChain := func(name string, fetch func() (uint64, error), store *uint64) {
 		poll := func() {
-			num, err := fetchBaseBlockNumber()
+			num, err := fetch()
 			if err != nil {
-				log.Printf("Base RPC error: %v", err)
+				log.Printf("%s RPC error: %v", name, err)
 				return
 			}
 			mu.Lock()
-			baseBlockNumber = num
+			*store = num
 			mu.Unlock()
-			log.Printf("Base block: %d", num)
+			log.Printf("%s block: %d", name, num)
 		}
 		poll()
 		ticker := time.NewTicker(12 * time.Second)
@@ -1003,7 +1015,10 @@ func main() {
 		for range ticker.C {
 			poll()
 		}
-	}()
+	}
+
+	go pollChain("Base", fetchBaseBlockNumber, &baseBlockNumber)
+	go pollChain("Arbitrum", fetchArbitrumBlockNumber, &arbitrumBlockNumber)
 
 	// ── Dashboard ─────────────────────────────────────────────────────────────
 
@@ -1017,10 +1032,11 @@ func main() {
 		recent := make([]ProcessedBlock, len(recentBlocks))
 		copy(recent, recentBlocks)
 		stats := map[string]any{
-			"base_block_number":    baseBlockNumber,
-			"blocks_processed":     blockCount,
-			"total_fees_collected": totalFeesCollected,
-			"recent_blocks":        recent,
+			"base_block_number":     baseBlockNumber,
+			"arbitrum_block_number": arbitrumBlockNumber,
+			"blocks_processed":      blockCount,
+			"total_fees_collected":  totalFeesCollected,
+			"recent_blocks":         recent,
 		}
 		mu.Unlock()
 		jsonOK(w, stats)
