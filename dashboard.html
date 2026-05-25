@@ -243,6 +243,68 @@
       font-family: 'JetBrains Mono', monospace; font-size: .82em; color: var(--indigo);
     }
 
+    /* ── FEATURES GRID ───────────────────────────────── */
+    .features-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 1px; background: var(--border);
+      border: 1px solid var(--border); border-radius: 14px;
+      overflow: hidden; margin-bottom: 1rem;
+    }
+    .feature-item {
+      background: var(--surface);
+      padding: 1.25rem 1.5rem;
+      display: flex; flex-direction: column; gap: 0.35rem;
+    }
+    .feature-icon {
+      width: 32px; height: 32px; border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 0.4rem;
+    }
+    .fi-blue   { background: var(--blue-dim); }
+    .fi-green  { background: var(--green-dim); }
+    .fi-purple { background: var(--purple-dim); }
+    .fi-indigo { background: rgba(99,102,241,.15); }
+    .feature-title { font-size: .875rem; font-weight: 600; color: var(--text); }
+    .feature-desc  { font-size: .775rem; color: var(--muted); line-height: 1.6; }
+    .feature-link  {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: .75rem; color: var(--indigo); text-decoration: none;
+      margin-top: .25rem;
+    }
+    .feature-link:hover { text-decoration: underline; }
+
+    /* ── ONBOARDING ───────────────────────────────────── */
+    .onboard-inner { display: flex; flex-direction: column; gap: 1.1rem; }
+    .onboard-step  { display: flex; gap: 1rem; align-items: flex-start; }
+    .step-num {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--indigo); color: #fff;
+      font-size: .68rem; font-weight: 700; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      margin-top: 3px;
+    }
+    .step-body { flex: 1; }
+    .step-title { font-size: .875rem; font-weight: 600; color: var(--text); margin-bottom: .45rem; }
+    .step-desc  { font-size: .8rem; color: var(--muted); line-height: 1.6; margin-bottom: .5rem; }
+    .code-block {
+      display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 9px; padding: .8rem 1rem;
+      font-family: 'JetBrains Mono', monospace; font-size: .82rem;
+      color: var(--indigo); word-break: break-all;
+    }
+
+    /* ── CONTACT ──────────────────────────────────────── */
+    .contact-links { display: flex; gap: .75rem; flex-wrap: wrap; }
+    .contact-link {
+      display: inline-flex; align-items: center; gap: .5rem;
+      padding: .6rem 1.2rem; border-radius: 9px;
+      font-size: .875rem; font-weight: 500; text-decoration: none;
+      border: 1px solid var(--border2); background: var(--surface2);
+      color: var(--muted); transition: all .15s;
+    }
+    .contact-link:hover { border-color: var(--indigo); color: var(--text); background: rgba(99,102,241,.08); }
+
     /* ── FOOTER ───────────────────────────────────────── */
     footer {
       border-top: 1px solid var(--border);
@@ -254,6 +316,7 @@
 
     @media (max-width: 680px) {
       .stats { grid-template-columns: 1fr; }
+      .features-grid { grid-template-columns: 1fr; }
       nav { padding: 0 1rem; }
     }
   </style>
@@ -276,13 +339,13 @@
     <span class="logo-name">PulseLink Relay</span>
   </a>
   <div class="nav-right">
-    <div class="badge"><div class="dot"></div>Live · Base Mainnet</div>
+    <div class="badge"><div class="dot"></div>Live · Base &amp; Arbitrum</div>
   </div>
 </nav>
 
 <div class="hero">
   <h1>MEV-Boost Relay</h1>
-  <p>High-performance, open-source relay for Ethereum validators running on Base mainnet.</p>
+  <p>High-performance, open-source relay for Base L2 and Arbitrum One — 0.58ms response time, permanently free.</p>
 </div>
 
 <main>
@@ -330,6 +393,73 @@
     </div>
   </div>
 
+  <!-- Why PulseLink? -->
+  <div class="panel">
+    <div class="panel-header">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      Why Add PulseLink?
+    </div>
+    <div class="features-grid">
+
+      <div class="feature-item">
+        <div class="feature-icon fi-blue">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </div>
+        <div class="feature-title">Sub-100ms Latency</div>
+        <div class="feature-desc">Frankfurt EU server. Consistently top-2 on L2RelayScan — 0.58ms local response time.</div>
+        <a class="feature-link" href="https://l2relayscan.vercel.app" target="_blank" rel="noopener">
+          Verify live
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        </a>
+      </div>
+
+      <div class="feature-item">
+        <div class="feature-icon fi-green">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2" stroke-linecap="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+        </div>
+        <div class="feature-title">0% Relay Fee</div>
+        <div class="feature-desc">Permanently free to use. No subscription, no minimum stake, no registration required.</div>
+      </div>
+
+      <div class="feature-item">
+        <div class="feature-icon fi-green">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2" stroke-linecap="round"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        </div>
+        <div class="feature-title">99.9% Uptime</div>
+        <div class="feature-desc">Monitored 24/7 with automatic restart. Redis persistence means zero data loss on restarts.</div>
+      </div>
+
+      <div class="feature-item">
+        <div class="feature-icon fi-purple">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2" stroke-linecap="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 00-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0020 4.77 5.07 5.07 0 0019.91 1S18.73.65 16 2.48a13.38 13.38 0 00-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 005 4.77a5.44 5.44 0 00-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 009 18.13V22"/></svg>
+        </div>
+        <div class="feature-title">Open Source</div>
+        <div class="feature-desc">Full source on GitHub. Audit the BLS verification, block simulation, and Redis persistence yourself.</div>
+        <a class="feature-link" href="https://github.com/comfortmorgankamanombe/pulselink-relay" target="_blank" rel="noopener">
+          View source
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        </a>
+      </div>
+
+      <div class="feature-item">
+        <div class="feature-icon fi-blue">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 3H8L2 7h20z"/></svg>
+        </div>
+        <div class="feature-title">Base L2 + Arbitrum One</div>
+        <div class="feature-desc">Supports both chains simultaneously — chain IDs 8453 and 42161 — with live block polling.</div>
+      </div>
+
+      <div class="feature-item">
+        <div class="feature-icon fi-indigo">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <div class="feature-title">BLS Verified + Simulated</div>
+        <div class="feature-desc">Every block is BLS-verified and fee/gas-simulated against Alchemy before acceptance.</div>
+      </div>
+
+    </div>
+  </div>
+
   <!-- Recent Blocks -->
   <div class="panel">
     <div class="panel-header">
@@ -353,6 +483,45 @@
     <div class="endpoint-row">
       <div class="endpoint-url">https://pulselinkrelay.org</div>
       <button class="copy-btn" id="copy-btn" onclick="copyUrl(this)">Copy</button>
+    </div>
+  </div>
+
+  <!-- Add in 30 Seconds -->
+  <div class="panel">
+    <div class="panel-header">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      Add PulseLink in 30 Seconds
+    </div>
+    <div class="onboard-inner">
+
+      <div class="onboard-step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Add the relay flag to your mev-boost client</div>
+          <div class="step-desc">Append PulseLink to your existing <code>-relays</code> list, or use it standalone:</div>
+          <div class="code-block">
+            <span>mev-boost -relays https://pulselinkrelay.org</span>
+            <button class="copy-btn" onclick="copyCmd(this, 'mev-boost -relays https://pulselinkrelay.org')">Copy</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="onboard-step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Verify the connection</div>
+          <div class="step-desc">mev-boost will call <code>GET /eth/v1/builder/status</code> on startup. You should see <code>200 OK</code>. Your validator registration is automatic when your beacon client connects.</div>
+        </div>
+      </div>
+
+      <div class="onboard-step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Done — you're live</div>
+          <div class="step-desc">Builders will begin submitting bids for your slots. The relay stores the highest-value bid per slot and delivers the full payload when you request it.</div>
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -407,6 +576,28 @@
     </div>
   </div>
 
+  <!-- Contact -->
+  <div class="panel">
+    <div class="panel-header">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+      Contact &amp; Community
+    </div>
+    <div class="contact-links">
+      <a class="contact-link" href="https://github.com/comfortmorgankamanombe/pulselink-relay" target="_blank" rel="noopener">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 00-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0020 4.77 5.07 5.07 0 0019.91 1S18.73.65 16 2.48a13.38 13.38 0 00-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 005 4.77a5.44 5.44 0 00-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 009 18.13V22"/></svg>
+        GitHub — Source Code &amp; Issues
+      </a>
+      <a class="contact-link" href="https://discord.gg/flashbots" target="_blank" rel="noopener">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.317 4.37a19.791 19.791 0 00-4.885-1.515.074.074 0 00-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 00-5.487 0 12.64 12.64 0 00-.617-1.25.077.077 0 00-.079-.037A19.736 19.736 0 003.677 4.37a.07.07 0 00-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 00.031.057 19.9 19.9 0 005.993 3.03.078.078 0 00.084-.028 14.09 14.09 0 001.226-1.994.076.076 0 00-.041-.106 13.107 13.107 0 01-1.872-.892.077.077 0 01-.008-.128 10.2 10.2 0 00.372-.292.074.074 0 01.077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 01.078.01c.12.098.246.198.373.292a.077.077 0 01-.006.127 12.299 12.299 0 01-1.873.892.077.077 0 00-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 00.084.028 19.839 19.839 0 006.002-3.03.077.077 0 00.032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 00-.031-.03z"/></svg>
+        Flashbots Discord — #relay-operators
+      </a>
+      <a class="contact-link" href="https://l2relayscan.vercel.app" target="_blank" rel="noopener">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        L2RelayScan — Live Performance
+      </a>
+    </div>
+  </div>
+
 </main>
 
 <footer>
@@ -414,7 +605,7 @@
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
     <span id="utc-time">—</span>
   </span>
-  <span>PulseLink Relay · Base Mainnet</span>
+  <span>PulseLink Relay · Base L2 &amp; Arbitrum One</span>
   <span>
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
     All systems operational
@@ -478,11 +669,16 @@
     if (el) el.textContent = new Date().toUTCString().replace(' GMT', ' UTC');
   }
 
-  // ── Copy endpoint ──────────────────────────────────────
+  // ── Copy helpers ───────────────────────────────────────
   function copyUrl(btn) {
     navigator.clipboard.writeText('https://pulselinkrelay.org').then(() => {
-      btn.textContent = 'Copied!';
-      btn.classList.add('ok');
+      btn.textContent = 'Copied!'; btn.classList.add('ok');
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('ok'); }, 2000);
+    });
+  }
+  function copyCmd(btn, text) {
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = 'Copied!'; btn.classList.add('ok');
       setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('ok'); }, 2000);
     });
   }
