@@ -33,6 +33,21 @@ const (
 	relaySig    = "0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 )
 
+// ── Shared HTTP transport (connection pooling for all outbound RPC calls) ─────
+
+var sharedTransport = &http.Transport{
+	MaxIdleConns:        100,
+	MaxIdleConnsPerHost: 20,
+	IdleConnTimeout:     90 * time.Second,
+	TLSHandshakeTimeout: 5 * time.Second,
+	DisableKeepAlives:   false,
+}
+
+var baseRPCClient = &http.Client{
+	Timeout:   5 * time.Second,
+	Transport: sharedTransport,
+}
+
 // ── Base RPC ──────────────────────────────────────────────────────────────────
 
 type rpcRequest struct {
@@ -48,7 +63,7 @@ type rpcResponse struct {
 
 func fetchBaseBlockNumber() (uint64, error) {
 	body, _ := json.Marshal(rpcRequest{JSONRPC: "2.0", Method: "eth_blockNumber", Params: []any{}, ID: 1})
-	resp, err := http.Post(baseRPCURL, "application/json", bytes.NewReader(body))
+	resp, err := baseRPCClient.Post(baseRPCURL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return 0, err
 	}
@@ -626,7 +641,7 @@ func queryLimit(r *http.Request, def int) int {
 
 var (
 	beaconURL        string
-	beaconHTTPClient = &http.Client{Timeout: 5 * time.Second}
+	beaconHTTPClient = &http.Client{Timeout: 5 * time.Second, Transport: sharedTransport}
 	beaconAvailable  bool // false = beacon unreachable at startup; log-only mode
 )
 
@@ -687,7 +702,7 @@ func isValidatorActive(pubkey string) (bool, error) {
 
 	if resp.StatusCode == http.StatusNotFound {
 		valStatusCacheMu.Lock()
-		valStatusCache[pubkey] = cachedValidatorStatus{active: false, expiresAt: time.Now().Add(384 * time.Second)}
+		valStatusCache[pubkey] = cachedValidatorStatus{active: false, expiresAt: time.Now().Add(600 * time.Second)}
 		valStatusCacheMu.Unlock()
 		return false, nil
 	}
@@ -709,7 +724,7 @@ func isValidatorActive(pubkey string) (bool, error) {
 	}
 
 	valStatusCacheMu.Lock()
-	valStatusCache[pubkey] = cachedValidatorStatus{active: active, expiresAt: time.Now().Add(384 * time.Second)}
+	valStatusCache[pubkey] = cachedValidatorStatus{active: active, expiresAt: time.Now().Add(600 * time.Second)}
 	valStatusCacheMu.Unlock()
 
 	return active, nil
@@ -719,7 +734,7 @@ func isValidatorActive(pubkey string) (bool, error) {
 
 var (
 	simulationHard      bool // true = reject on any sim failure; false = log-only for RPC errors
-	alchemyHTTPClient   = &http.Client{Timeout: 8 * time.Second}
+	alchemyHTTPClient = &http.Client{Timeout: 8 * time.Second, Transport: sharedTransport}
 )
 
 func initSimulation() {
@@ -944,6 +959,20 @@ func simulateBlock(req SubmitBlockRequest) (string, bool) {
 	return "", true
 }
 
+// prewarmAlchemy opens a persistent connection to the Alchemy endpoint so the
+// first real RPC call (eth_estimateGas / eth_blockNumber) doesn't pay the
+// TLS handshake + TCP connect cost.
+func prewarmAlchemy() {
+	body, _ := json.Marshal(rpcRequest{JSONRPC: "2.0", Method: "eth_blockNumber", Params: []any{}, ID: 1})
+	resp, err := alchemyHTTPClient.Post(baseRPCURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Printf("Alchemy pre-warm failed (non-fatal): %v", err)
+		return
+	}
+	resp.Body.Close()
+	log.Printf("Alchemy: connection pre-warmed")
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 func main() {
@@ -953,6 +982,7 @@ func main() {
 	recoverFromRedis()
 	initBeacon()
 	initSimulation()
+	prewarmAlchemy()
 
 	// Poll Base mainnet block number every 12 seconds
 	go func() {
@@ -1454,7 +1484,13 @@ func main() {
 	})
 
 	fmt.Println("Listening on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	srv := &http.Server{
+		Addr:         ":8080",
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second, // keep-alive connection lifetime
+	}
+	log.Fatal(srv.ListenAndServe())
 }
 
 func min(a, b int) int {
