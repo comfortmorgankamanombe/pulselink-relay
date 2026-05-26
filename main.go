@@ -36,8 +36,26 @@ const (
 
 var (
 	arbitrumRPCURL string
-	startedAt      = time.Now()
+	startedAt      time.Time // set by initStartTime after Redis connects
 )
+
+func initStartTime() {
+	const key = "pulselink:started_at"
+	val, err := rdb.Get(bgCtx, key).Int64()
+	if err == redis.Nil {
+		startedAt = time.Now()
+		rdb.Set(bgCtx, key, startedAt.Unix(), 0)
+		log.Printf("First launch — deployment time recorded: %s", startedAt.UTC().Format(time.RFC3339))
+	} else if err != nil {
+		startedAt = time.Now()
+		log.Printf("Could not read deployment time from Redis (%v) — using current time", err)
+	} else {
+		startedAt = time.Unix(val, 0)
+		log.Printf("Deployment time restored from Redis: %s (true uptime: %s)",
+			startedAt.UTC().Format(time.RFC3339),
+			time.Since(startedAt).Round(time.Second))
+	}
+}
 
 // ── Shared HTTP transport (connection pooling for all outbound RPC calls) ─────
 
@@ -995,6 +1013,7 @@ func main() {
 
 	initRedis()
 	recoverFromRedis()
+	initStartTime()
 	initBeacon()
 	initSimulation()
 	prewarmAlchemy()
