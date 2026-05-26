@@ -34,7 +34,10 @@ const (
 	relaySig        = "0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 )
 
-var arbitrumRPCURL string
+var (
+	arbitrumRPCURL string
+	startedAt      = time.Now()
+)
 
 // ── Shared HTTP transport (connection pooling for all outbound RPC calls) ─────
 
@@ -1497,6 +1500,70 @@ func main() {
 		bid := best.Req.Message
 		fmt.Fprintf(w, `{"status":"ok","best_block":"%s","value":"%s","builder":"%s"}`,
 			bid.BlockHash, bid.Value, bid.BuilderPubkey)
+	})
+
+	// ── /health ───────────────────────────────────────────────────────────────
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		redisOK := rdb.Ping(bgCtx).Err() == nil
+		redisStatus := "ok"
+		if !redisOK {
+			redisStatus = "error"
+		}
+		mu.Lock()
+		snap := map[string]any{
+			"status":               "ok",
+			"uptime":               time.Since(startedAt).Round(time.Second).String(),
+			"redis":                redisStatus,
+			"beacon_available":     beaconAvailable,
+			"base_block":           baseBlockNumber,
+			"arbitrum_block":       arbitrumBlockNumber,
+			"validators":           len(validatorRegs),
+			"blocks_processed":     blockCount,
+			"total_fees_eth":       totalFeesCollected,
+			"simulation_mode":      map[bool]string{true: "hard", false: "soft"}[simulationHard],
+		}
+		mu.Unlock()
+		if !redisOK {
+			snap["status"] = "degraded"
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if !redisOK {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+		json.NewEncoder(w).Encode(snap)
+	})
+
+	// ── /metrics (Prometheus text format) ────────────────────────────────────
+	http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		bc := blockCount
+		vr := len(validatorRegs)
+		fees := totalFeesCollected
+		base := baseBlockNumber
+		arb := arbitrumBlockNumber
+		mu.Unlock()
+		upSecs := time.Since(startedAt).Seconds()
+
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		fmt.Fprintf(w, `# HELP pulselink_uptime_seconds Seconds since relay started
+# TYPE pulselink_uptime_seconds gauge
+pulselink_uptime_seconds %.0f
+# HELP pulselink_blocks_processed_total Total blocks accepted from builders
+# TYPE pulselink_blocks_processed_total counter
+pulselink_blocks_processed_total %d
+# HELP pulselink_validators_registered Total registered validators
+# TYPE pulselink_validators_registered gauge
+pulselink_validators_registered %d
+# HELP pulselink_total_fees_eth Total ETH collected in builder fees
+# TYPE pulselink_total_fees_eth gauge
+pulselink_total_fees_eth %.9f
+# HELP pulselink_base_block_number Latest polled Base L2 block number
+# TYPE pulselink_base_block_number gauge
+pulselink_base_block_number %d
+# HELP pulselink_arbitrum_block_number Latest polled Arbitrum One block number
+# TYPE pulselink_arbitrum_block_number gauge
+pulselink_arbitrum_block_number %d
+`, upSecs, bc, vr, fees, base, arb)
 	})
 
 	fmt.Println("Listening on :8080")
