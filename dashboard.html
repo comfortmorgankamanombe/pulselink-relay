@@ -320,7 +320,7 @@
 
     /* ── RELAY STATUS STRIP ──────────────────────────── */
     .status-grid {
-      display: grid; grid-template-columns: repeat(4, 1fr);
+      display: grid; grid-template-columns: repeat(3, 1fr);
       gap: 1px; background: var(--border);
       border-radius: 10px; overflow: hidden;
     }
@@ -454,12 +454,6 @@
       Relay Status
     </div>
     <div class="status-grid">
-
-      <div class="status-item">
-        <div class="status-label">Uptime</div>
-        <div class="status-value sv-green" id="stat-uptime">—</div>
-        <div class="status-sub">since first deployment</div>
-      </div>
 
       <div class="status-item">
         <div class="status-label">Region</div>
@@ -780,14 +774,11 @@
   async function fetchHealth() {
     try {
       const h = await fetch('/health').then(r => r.json());
-      setText('stat-uptime', h.uptime || '—');
       const validators = (h.validators ?? '—').toString();
       setText('stat-validators', validators);
       setText('stat-validators-card', validators);
       setText('stat-blocks-delivered', (h.blocks_processed ?? 0).toLocaleString());
-    } catch (_) {
-      setText('stat-uptime', '—');
-    }
+    } catch (_) {}
   }
 
   // ── Clock ──────────────────────────────────────────────
