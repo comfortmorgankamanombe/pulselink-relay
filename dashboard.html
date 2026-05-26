@@ -243,6 +243,30 @@
       font-family: 'JetBrains Mono', monospace; font-size: .82em; color: var(--indigo);
     }
 
+    /* ── PUBKEY ROW ──────────────────────────────────── */
+    .pubkey-row {
+      display: inline-flex; align-items: center; gap: .6rem;
+      margin-top: 1rem; padding: .5rem .9rem;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 9px; max-width: 100%;
+    }
+    .pubkey-label {
+      font-size: .68rem; font-weight: 600; letter-spacing: .07em;
+      text-transform: uppercase; color: var(--muted); white-space: nowrap; flex-shrink: 0;
+    }
+    .pubkey-val {
+      font-family: 'JetBrains Mono', monospace; font-size: .72rem;
+      color: var(--indigo); word-break: break-all;
+    }
+    .pubkey-copy {
+      flex-shrink: 0; background: var(--surface2); border: 1px solid var(--border2);
+      color: var(--muted); padding: .25rem .7rem; border-radius: 6px;
+      font-size: .72rem; font-weight: 500; cursor: pointer;
+      font-family: 'Inter', sans-serif; transition: all .15s;
+    }
+    .pubkey-copy:hover { background: var(--border2); color: var(--text); }
+    .pubkey-copy.ok { background: var(--green-dim); border-color: #166534; color: var(--green); }
+
     /* ── FEATURES GRID ───────────────────────────────── */
     .features-grid {
       display: grid; grid-template-columns: repeat(3, 1fr);
@@ -296,7 +320,7 @@
 
     /* ── RELAY STATUS STRIP ──────────────────────────── */
     .status-grid {
-      display: grid; grid-template-columns: repeat(5, 1fr);
+      display: grid; grid-template-columns: repeat(4, 1fr);
       gap: 1px; background: var(--border);
       border-radius: 10px; overflow: hidden;
     }
@@ -371,6 +395,11 @@
 <div class="hero">
   <h1>MEV-Boost Relay</h1>
   <p>High-performance, open-source relay for Base L2 and Arbitrum One — 0.58ms response time, permanently free.</p>
+  <div class="pubkey-row">
+    <span class="pubkey-label">Relay Public Key</span>
+    <span class="pubkey-val">0x96c948e367e49de63201de234002a9a9f74545ddad4b7ef3e0c4fb07f510804aadbd675e5d4eb15d0add7f35371f16f6</span>
+    <button class="pubkey-copy" onclick="copyPubkey(this)">Copy</button>
+  </div>
 </div>
 
 <main>
@@ -380,41 +409,41 @@
     <div class="card blue">
       <div class="card-accent"></div>
       <div class="card-icon">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 3H8L2 7h20z"/></svg>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
       </div>
-      <div class="card-label">Base Block</div>
-      <div class="card-value" id="base-block">—</div>
-      <div class="card-sub">Chain ID 8453 · every 12s</div>
-    </div>
-
-    <div class="card blue">
-      <div class="card-accent"></div>
-      <div class="card-icon">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linecap="round"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5"/><line x1="12" y1="22" x2="12" y2="15.5"/><polyline points="22 8.5 12 15.5 2 8.5"/></svg>
-      </div>
-      <div class="card-label">Arbitrum Block</div>
-      <div class="card-value" id="arbitrum-block">—</div>
-      <div class="card-sub">Chain ID 42161 · every 12s</div>
+      <div class="card-label">Validators Registered</div>
+      <div class="card-value" id="stat-validators-card">—</div>
+      <div class="card-sub">Active registrations</div>
     </div>
 
     <div class="card purple">
       <div class="card-accent"></div>
       <div class="card-icon">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2" stroke-linecap="round"><path d="M4 17h5l3-8 4 16 3.5-11L22 20"/></svg>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
       </div>
-      <div class="card-label">Blocks Processed</div>
-      <div class="card-value" id="blocks-processed">0</div>
-      <div class="card-sub">Submitted by builders</div>
+      <div class="card-label">Blocks Delivered</div>
+      <div class="card-value" id="stat-blocks-delivered">0</div>
+      <div class="card-sub">Payloads sent to proposers</div>
+    </div>
+
+    <div class="card blue">
+      <div class="card-accent"></div>
+      <div class="card-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      </div>
+      <div class="card-label">Latest Slot</div>
+      <div class="card-value" id="base-block">—</div>
+      <div class="card-sub">Base · <span id="arbitrum-block" style="font-size:.85em;color:#38bdf8">—</span> Arb</div>
     </div>
 
     <div class="card green">
       <div class="card-accent"></div>
       <div class="card-icon">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2" stroke-linecap="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
       </div>
-      <div class="card-label">Total ETH Collected</div>
+      <div class="card-label">Total ETH Delivered</div>
       <div class="card-value" id="total-eth">0.000000</div>
-      <div class="card-sub">In gas fees</div>
+      <div class="card-sub">In builder fees</div>
     </div>
   </div>
 
@@ -436,12 +465,6 @@
         <div class="status-label">Region</div>
         <div class="status-value sv-blue">FRA1 · EU</div>
         <div class="status-sub">Frankfurt, Germany</div>
-      </div>
-
-      <div class="status-item">
-        <div class="status-label">Response Time</div>
-        <div class="status-value sv-green" id="stat-latency">—</div>
-        <div class="status-sub">to /health endpoint</div>
       </div>
 
       <div class="status-item">
@@ -536,6 +559,20 @@
       <div class="empty-state">
         <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#334155" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
         Waiting for builders to submit blocks
+      </div>
+    </div>
+  </div>
+
+  <!-- Recently Delivered Payloads -->
+  <div class="panel">
+    <div class="panel-header">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+      Recently Delivered Payloads
+    </div>
+    <div id="delivered-wrap">
+      <div class="empty-state">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#334155" stroke-width="1.5"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        No payloads delivered yet — ready when blocks flow
       </div>
     </div>
   </div>
@@ -690,7 +727,6 @@
 
       setText('base-block', Number(d.base_block_number).toLocaleString());
       setText('arbitrum-block', Number(d.arbitrum_block_number).toLocaleString());
-      setText('blocks-processed', Number(d.blocks_processed).toLocaleString());
       setText('total-eth', Number(d.total_fees_collected).toFixed(6) + ' ETH');
 
       const wrap = document.getElementById('blocks-wrap');
@@ -742,21 +778,14 @@
 
   // ── Health polling ─────────────────────────────────────
   async function fetchHealth() {
-    const t0 = performance.now();
     try {
       const h = await fetch('/health').then(r => r.json());
-      const ms = Math.round(performance.now() - t0);
-
       setText('stat-uptime', h.uptime || '—');
-      setText('stat-validators', (h.validators ?? '—').toString());
-
-      const latEl = document.getElementById('stat-latency');
-      if (latEl) {
-        latEl.textContent = ms + 'ms';
-        latEl.className = 'status-value ' + (ms < 50 ? 'sv-green' : ms < 200 ? 'sv-blue' : 'sv-muted');
-      }
+      const validators = (h.validators ?? '—').toString();
+      setText('stat-validators', validators);
+      setText('stat-validators-card', validators);
+      setText('stat-blocks-delivered', (h.blocks_processed ?? 0).toLocaleString());
     } catch (_) {
-      setText('stat-latency', 'error');
       setText('stat-uptime', '—');
     }
   }
@@ -765,6 +794,48 @@
   function tick() {
     const el = document.getElementById('utc-time');
     if (el) el.textContent = new Date().toUTCString().replace(' GMT', ' UTC');
+  }
+
+  // ── Wei → ETH conversion (string-based to avoid float precision loss) ────────
+  function weiToEth(weiStr) {
+    if (!weiStr || weiStr === '0') return '0.000000';
+    const s = weiStr.padStart(19, '0');
+    const intPart = s.slice(0, s.length - 18) || '0';
+    const fracPart = s.slice(s.length - 18);
+    return parseFloat(intPart + '.' + fracPart).toFixed(6);
+  }
+
+  // ── Recently Delivered Payloads ───────────────────────
+  async function fetchDelivered() {
+    try {
+      const data = await fetch('/relay/v1/data/bidtraces/proposer_payload_delivered?limit=10').then(r => r.json());
+      const wrap = document.getElementById('delivered-wrap');
+      if (!Array.isArray(data) || data.length === 0) {
+        wrap.innerHTML = `<div class="empty-state">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#334155" stroke-width="1.5"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          No payloads delivered yet — ready when blocks flow
+        </div>`;
+      } else {
+        wrap.innerHTML = `<table>
+          <thead><tr>
+            <th>Slot</th>
+            <th>Block Hash</th>
+            <th>Builder</th>
+            <th>Value (ETH)</th>
+            <th style="text-align:right">Num Tx</th>
+          </tr></thead>
+          <tbody>
+            ${data.map(b => `<tr>
+              <td class="td-block">${b.slot || '—'}</td>
+              <td class="td-builder" title="${b.block_hash || ''}">${b.block_hash ? b.block_hash.slice(0,10)+'…' : '—'}</td>
+              <td class="td-builder" title="${b.builder_pubkey || ''}">${b.builder_pubkey ? b.builder_pubkey.slice(0,10)+'…' : '—'}</td>
+              <td class="td-fee">${weiToEth(b.value)}</td>
+              <td class="td-time" style="text-align:right">${b.num_tx || '0'}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>`;
+      }
+    } catch (_) {}
   }
 
   // ── Copy helpers ───────────────────────────────────────
@@ -776,6 +847,13 @@
   }
   function copyCmd(btn, text) {
     navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = 'Copied!'; btn.classList.add('ok');
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('ok'); }, 2000);
+    });
+  }
+  function copyPubkey(btn) {
+    const val = btn.previousElementSibling.textContent.trim();
+    navigator.clipboard.writeText(val).then(() => {
       btn.textContent = 'Copied!'; btn.classList.add('ok');
       setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('ok'); }, 2000);
     });
@@ -792,8 +870,10 @@
   // ── Boot ───────────────────────────────────────────────
   fetchStats();
   fetchHealth();
+  fetchDelivered();
   setInterval(fetchStats, 5000);
   setInterval(fetchHealth, 5000);
+  setInterval(fetchDelivered, 5000);
   tick();
   setInterval(tick, 1000);
 </script>
