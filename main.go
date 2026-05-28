@@ -27,16 +27,14 @@ import (
 var dashboardHTML string
 
 const (
-	baseRPCURL      = "https://base-mainnet.g.alchemy.com/v2/aE6JU86iKh_qQRQVfUbmN"
-	chainID         = 8453
-	arbitrumChainID = 42161
+	chainID     = 1
 	relayPubkey = "0x96c948e367e49de63201de234002a9a9f74545ddad4b7ef3e0c4fb07f510804aadbd675e5d4eb15d0add7f35371f16f6"
 	relaySig    = "0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 )
 
 var (
-	arbitrumRPCURL string
-	startedAt      time.Time // set by initStartTime after Redis connects
+	ethRPCURL string
+	startedAt time.Time // set by initStartTime after Redis connects
 )
 
 func initStartTime() {
@@ -99,8 +97,7 @@ func fetchBlockNumber(rpcURL string) (uint64, error) {
 	return strconv.ParseUint(strings.TrimPrefix(rpc.Result, "0x"), 16, 64)
 }
 
-func fetchBaseBlockNumber() (uint64, error)     { return fetchBlockNumber(baseRPCURL) }
-func fetchArbitrumBlockNumber() (uint64, error) { return fetchBlockNumber(arbitrumRPCURL) }
+func fetchEthBlockNumber() (uint64, error) { return fetchBlockNumber(ethRPCURL) }
 
 // ── Relay types ───────────────────────────────────────────────────────────────
 
@@ -367,11 +364,10 @@ type storedBlockData struct {
 
 var (
 	// Dashboard stats
-	totalFeesCollected  float64
-	blockCount          int
-	baseBlockNumber     uint64
-	arbitrumBlockNumber uint64
-	recentBlocks        []ProcessedBlock
+	totalFeesCollected float64
+	blockCount         int
+	ethBlockNumber     uint64
+	recentBlocks       []ProcessedBlock
 
 	// Validator registry: pubkey -> registration
 	validatorRegs    = make(map[string]SignedValidatorRegistration)
@@ -915,7 +911,7 @@ func runEstimateGas(tx *simTx) error {
 		Params:  []any{estimateGasCall{To: tx.to, Value: tx.value, Data: tx.data}, "latest"},
 		ID:      1,
 	})
-	resp, err := alchemyHTTPClient.Post(baseRPCURL, "application/json", bytes.NewReader(body))
+	resp, err := alchemyHTTPClient.Post(ethRPCURL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("alchemy unreachable: %w", err)
 	}
@@ -992,7 +988,7 @@ func simulateBlock(req SubmitBlockRequest) (string, bool) {
 // TLS handshake + TCP connect cost.
 func prewarmAlchemy() {
 	body, _ := json.Marshal(rpcRequest{JSONRPC: "2.0", Method: "eth_blockNumber", Params: []any{}, ID: 1})
-	resp, err := alchemyHTTPClient.Post(baseRPCURL, "application/json", bytes.NewReader(body))
+	resp, err := alchemyHTTPClient.Post(ethRPCURL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		log.Printf("Alchemy pre-warm failed (non-fatal): %v", err)
 		return
@@ -1004,11 +1000,11 @@ func prewarmAlchemy() {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 func main() {
-	fmt.Printf("PulseLink Relay starting — Base L2 chain ID %d, Arbitrum One chain ID %d\n", chainID, arbitrumChainID)
+	fmt.Printf("PulseLink Relay starting — Ethereum Mainnet chain ID %d\n", chainID)
 
-	arbitrumRPCURL = os.Getenv("ARBITRUM_RPC_URL")
-	if arbitrumRPCURL == "" {
-		arbitrumRPCURL = "https://arb-mainnet.g.alchemy.com/v2/aE6JU86iKh_qQRQVfUbmN"
+	ethRPCURL = os.Getenv("ETH_RPC_URL")
+	if ethRPCURL == "" {
+		ethRPCURL = "https://eth-mainnet.g.alchemy.com/v2/aE6JU86iKh_qQRQVfUbmN"
 	}
 
 	initRedis()
@@ -1018,18 +1014,18 @@ func main() {
 	initSimulation()
 	prewarmAlchemy()
 
-	// Poll Base and Arbitrum block numbers every 12 seconds
-	pollChain := func(name string, fetch func() (uint64, error), store *uint64) {
+	// Poll Ethereum mainnet block number every 12 seconds
+	go func() {
 		poll := func() {
-			num, err := fetch()
+			num, err := fetchEthBlockNumber()
 			if err != nil {
-				log.Printf("%s RPC error: %v", name, err)
+				log.Printf("Ethereum RPC error: %v", err)
 				return
 			}
 			mu.Lock()
-			*store = num
+			ethBlockNumber = num
 			mu.Unlock()
-			log.Printf("%s block: %d", name, num)
+			log.Printf("Ethereum block: %d", num)
 		}
 		poll()
 		ticker := time.NewTicker(12 * time.Second)
@@ -1037,10 +1033,7 @@ func main() {
 		for range ticker.C {
 			poll()
 		}
-	}
-
-	go pollChain("Base", fetchBaseBlockNumber, &baseBlockNumber)
-	go pollChain("Arbitrum", fetchArbitrumBlockNumber, &arbitrumBlockNumber)
+	}()
 
 	// ── Dashboard ─────────────────────────────────────────────────────────────
 
@@ -1054,9 +1047,8 @@ func main() {
 		recent := make([]ProcessedBlock, len(recentBlocks))
 		copy(recent, recentBlocks)
 		stats := map[string]any{
-			"base_block_number":     baseBlockNumber,
-			"arbitrum_block_number": arbitrumBlockNumber,
-			"blocks_processed":      blockCount,
+			"eth_block_number": ethBlockNumber,
+			"blocks_processed": blockCount,
 			"total_fees_collected":  totalFeesCollected,
 			"recent_blocks":         recent,
 		}
@@ -1074,7 +1066,7 @@ func main() {
 	// Legacy status kept for backwards compatibility
 	http.HandleFunc("/relay/v1/builder/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"status":"ok","relay":"pulselink","version":"0.2.0","chain_id":%d,"time":"%s"}`,
+		fmt.Fprintf(w, `{"status":"ok","relay":"pulselink","version":"0.3.0","chain_id":%d,"time":"%s"}`,
 			chainID, time.Now().Format(time.RFC3339))
 	})
 
@@ -1137,7 +1129,7 @@ func main() {
 		}
 
 		mu.Lock()
-		slot := strconv.FormatUint(baseBlockNumber, 10)
+		slot := strconv.FormatUint(ethBlockNumber, 10)
 		entries := make([]ValidatorEntry, 0, len(validatorRegs))
 		for pk, reg := range validatorRegs {
 			entries = append(entries, ValidatorEntry{
@@ -1530,16 +1522,15 @@ func main() {
 		}
 		mu.Lock()
 		snap := map[string]any{
-			"status":               "ok",
-			"uptime":               time.Since(startedAt).Round(time.Second).String(),
-			"redis":                redisStatus,
-			"beacon_available":     beaconAvailable,
-			"base_block":           baseBlockNumber,
-			"arbitrum_block":       arbitrumBlockNumber,
-			"validators":           len(validatorRegs),
-			"blocks_processed":     blockCount,
-			"total_fees_eth":       totalFeesCollected,
-			"simulation_mode":      map[bool]string{true: "hard", false: "soft"}[simulationHard],
+			"status":           "ok",
+			"uptime":           time.Since(startedAt).Round(time.Second).String(),
+			"redis":            redisStatus,
+			"beacon_available": beaconAvailable,
+			"eth_block":        ethBlockNumber,
+			"validators":       len(validatorRegs),
+			"blocks_processed": blockCount,
+			"total_fees_eth":   totalFeesCollected,
+			"simulation_mode":  map[bool]string{true: "hard", false: "soft"}[simulationHard],
 		}
 		mu.Unlock()
 		if !redisOK {
@@ -1558,8 +1549,7 @@ func main() {
 		bc := blockCount
 		vr := len(validatorRegs)
 		fees := totalFeesCollected
-		base := baseBlockNumber
-		arb := arbitrumBlockNumber
+		eth := ethBlockNumber
 		mu.Unlock()
 		upSecs := time.Since(startedAt).Seconds()
 
@@ -1576,13 +1566,10 @@ pulselink_validators_registered %d
 # HELP pulselink_total_fees_eth Total ETH collected in builder fees
 # TYPE pulselink_total_fees_eth gauge
 pulselink_total_fees_eth %.9f
-# HELP pulselink_base_block_number Latest polled Base L2 block number
-# TYPE pulselink_base_block_number gauge
-pulselink_base_block_number %d
-# HELP pulselink_arbitrum_block_number Latest polled Arbitrum One block number
-# TYPE pulselink_arbitrum_block_number gauge
-pulselink_arbitrum_block_number %d
-`, upSecs, bc, vr, fees, base, arb)
+# HELP pulselink_eth_block_number Latest polled Ethereum mainnet block number
+# TYPE pulselink_eth_block_number gauge
+pulselink_eth_block_number %d
+`, upSecs, bc, vr, fees, eth)
 	})
 
 	fmt.Println("Listening on :8080")
@@ -1601,3 +1588,4 @@ func min(a, b int) int {
 	}
 	return b
 }
+
